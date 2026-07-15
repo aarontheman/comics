@@ -1,0 +1,800 @@
+<!DOCTYPE html>
+<html lang="en">
+<!--
+  index.html
+  ==========
+  Comic Collection Web App — Main Gallery
+  Version: 2.0.0
+  Date:    2026-07-12
+
+  PURPOSE:
+    Single-file web app for browsing a personal comic book collection.
+    Reads data from data/comics.tsv and displays cover images from covers/
+    Both files are hosted on GitHub Pages alongside this file.
+
+  HOSTED AT:
+    aarontheman.github.io/comics
+
+  FEATURES:
+    - Gallery and list views with lazy-loaded cover images
+    - Search by title, publisher, year, notes
+    - Filter by publisher, year, genre
+    - Detail view with all fields and clickable links
+    - Fullscreen cover lightbox with pinch-to-zoom on iOS
+    - Slideshow with sequential and random modes
+    - Flag covers as incorrect (stored in browser localStorage)
+    - Keyboard shortcuts (see #kbd-hint)
+    - Touch/swipe navigation on iOS
+
+  Version History:
+    v1.0.0  2026-05-01  Initial gallery release
+    v1.1.0  2026-05-15  Added detail view, flag feature, slideshow
+    v1.2.0  2026-06-01  Added lightbox, random cover, iOS swipe
+    v1.3.0  2026-06-15  Added search clear button, filter collapse,
+                        notes search, slideshow indicator tap
+    v2.0.0  2026-07-12  Added CV URL display, month and genre fields,
+                        version header added
+-->
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=5.0">
+<title>Comic Collection</title>
+<style>
+*,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+:root{
+  --bg:#1a1a1a;
+  --surface:#242424;
+  --surface2:#2e2e2e;
+  --border:#383838;
+  --amber:#e8a020;
+  --amber-dim:#b87c18;
+  --text:#e8e6e0;
+  --text-dim:#aaa;
+  --text-dimmer:#777;
+  --radius:6px;
+  --card-w:160px;
+  --gap:8px;
+}
+html{background:var(--bg);color:var(--text);font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;font-size:14px}
+body{min-height:100vh;display:flex;flex-direction:column}
+a{color:var(--amber);text-decoration:none}
+a:hover{text-decoration:underline}
+button{cursor:pointer;border:none;background:none;color:inherit;font:inherit}
+
+/* Header */
+#header{
+  position:sticky;top:0;z-index:100;
+  background:rgba(26,26,26,.95);
+  backdrop-filter:blur(8px);
+  border-bottom:1px solid var(--border);
+  padding:10px 16px;
+  display:flex;flex-direction:column;gap:8px;
+}
+#header-top{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+#status{font-size:12px;color:var(--text-dim);margin-left:auto;white-space:nowrap}
+
+/* Controls */
+#controls{display:flex;gap:8px;flex-wrap:wrap;align-items:center}
+#search-wrap{position:relative;flex:1;min-width:160px}
+#search{width:100%;background:var(--surface2);border:1px solid var(--border);color:var(--text);border-radius:var(--radius);padding:6px 28px 6px 10px;font-size:13px;outline:none}
+#search:focus{border-color:var(--amber)}
+#search-clear{position:absolute;right:6px;top:50%;transform:translateY(-50%);color:var(--text-dimmer);font-size:16px;display:none;background:none;border:none;cursor:pointer;padding:0 2px;line-height:1}
+#search-clear.visible{display:block}
+#search-clear:hover{color:var(--text)}
+#filters{display:flex;gap:8px;flex-wrap:wrap;max-height:0;overflow:hidden;transition:max-height .25s,opacity .25s;opacity:0;width:100%}
+#filters.visible{max-height:80px;opacity:1}
+.ctrl-input{background:var(--surface2);border:1px solid var(--border);color:var(--text);border-radius:var(--radius);padding:6px 10px;font-size:13px;outline:none}
+.ctrl-input:focus{border-color:var(--amber)}
+select.ctrl-input{min-width:130px;cursor:pointer}
+.btn{background:var(--surface2);border:1px solid var(--border);color:var(--text-dim);border-radius:var(--radius);padding:6px 10px;font-size:12px;transition:all .15s;white-space:nowrap}
+.btn:hover{border-color:var(--amber);color:var(--amber)}
+.btn.active{background:var(--amber);color:#111;border-color:var(--amber);font-weight:600}
+#view-toggle{display:flex;gap:4px}
+
+/* Grid */
+#grid-view{flex:1;padding:var(--gap);display:grid;grid-template-columns:repeat(auto-fill,minmax(var(--card-w),1fr));gap:var(--gap);align-content:start}
+#grid-view.hidden,#table-view.hidden{display:none}
+
+/* Card */
+.card{position:relative;cursor:pointer;border-radius:var(--radius);overflow:hidden;background:var(--surface);border:1px solid var(--border);transition:transform .15s,border-color .15s,box-shadow .15s;aspect-ratio:2/3;user-select:none}
+.card:hover{transform:translateY(-2px);border-color:var(--amber);box-shadow:0 4px 20px rgba(232,160,32,.2)}
+.card.selected{border-color:var(--amber);box-shadow:0 0 0 2px var(--amber)}
+.card-cover{width:100%;height:100%;object-fit:cover;display:block;transition:opacity .2s}
+.card-cover.loading{opacity:0}
+.card-cover.loaded{opacity:1}
+.card-placeholder{width:100%;height:100%;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:6px;padding:8px;text-align:center;background:var(--surface2)}
+.card-placeholder .p-title{font-size:11px;font-weight:600;color:var(--text);line-height:1.3}
+.card-placeholder .p-issue{font-size:10px;color:var(--text-dim);font-family:ui-monospace,monospace}
+.card-placeholder .p-pub{font-size:9px;color:var(--text-dimmer)}
+.card-label{position:absolute;bottom:0;left:0;right:0;background:linear-gradient(transparent,rgba(0,0,0,.85));padding:20px 6px 5px;font-size:10px;color:#ddd;opacity:0;transition:opacity .15s;pointer-events:none}
+.card:hover .card-label,.card.selected .card-label{opacity:1}
+.card-label .cl-title{font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.card-label .cl-issue{color:var(--text-dim);font-family:ui-monospace,monospace}
+.flag-btn{position:absolute;top:4px;right:4px;width:22px;height:22px;border-radius:50%;background:rgba(0,0,0,.6);color:#888;font-size:11px;display:flex;align-items:center;justify-content:center;opacity:0;transition:opacity .15s,background .15s;z-index:2}
+.card:hover .flag-btn,.flag-btn.flagged{opacity:1}
+.flag-btn:hover,.flag-btn.flagged{background:rgba(200,60,60,.8);color:#fff}
+
+/* Table */
+#table-view{flex:1;overflow-x:auto;padding:0}
+table{width:100%;border-collapse:collapse;font-size:13px}
+thead th{background:var(--surface);color:var(--text-dim);font-size:11px;text-transform:uppercase;letter-spacing:.06em;font-weight:500;padding:10px 12px;border-bottom:1px solid var(--border);text-align:left;cursor:pointer;user-select:none;white-space:nowrap}
+thead th:hover{color:var(--text)}
+thead th.sorted{color:var(--amber)}
+.sa{margin-left:4px;opacity:.4}
+thead th.sorted .sa{opacity:1}
+tbody tr{border-bottom:1px solid var(--border);cursor:pointer}
+tbody tr:hover{background:var(--surface)}
+tbody td{padding:8px 12px;vertical-align:middle;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:200px}
+td.thumb{width:36px;padding:4px 8px}
+td.thumb img{width:28px;height:42px;object-fit:cover;border-radius:2px;display:block}
+td.ti{font-weight:500;max-width:240px}
+td.is{font-family:ui-monospace,monospace;color:var(--text-dim);font-size:12px}
+td.yr,td.pu{color:var(--text-dim)}
+.empty{text-align:center;padding:4rem;color:var(--text-dimmer);font-size:14px}
+
+/* Detail overlay */
+#detail{display:none;position:fixed;inset:0;z-index:200;background:rgba(0,0,0,.75);backdrop-filter:blur(4px);align-items:center;justify-content:center;padding:20px}
+#detail.open{display:flex}
+#detail-backdrop{position:absolute;inset:0;z-index:0}
+#detail-box{background:var(--surface);border:1px solid var(--border);border-radius:10px;max-width:560px;width:100%;max-height:90vh;overflow-y:auto;display:flex;flex-direction:column;position:relative;z-index:1}
+#detail-inner{display:flex;gap:0;flex:1}
+#detail-cover-col{width:140px;min-width:140px;background:var(--bg);border-radius:10px 0 0 10px;overflow:hidden;display:flex;flex-direction:column}
+#detail-cover-img{width:100%;flex:1;object-fit:cover;cursor:zoom-in;display:block}
+#detail-cover-placeholder{flex:1;display:flex;align-items:center;justify-content:center;color:var(--text-dimmer);font-size:12px;padding:16px;text-align:center;min-height:180px}
+#detail-cover-actions{padding:6px;display:flex;gap:4px;justify-content:center;border-top:1px solid var(--border)}
+#detail-fields{flex:1;padding:16px;overflow-y:auto}
+#detail-title{font-size:16px;font-weight:700;margin-bottom:2px;line-height:1.3}
+#detail-issue{font-family:ui-monospace,monospace;color:var(--amber);font-size:13px;margin-bottom:12px}
+.field-row{display:flex;gap:8px;margin-bottom:6px;font-size:13px}
+.field-label{color:var(--text-dimmer);min-width:80px;flex-shrink:0;font-size:11px;text-transform:uppercase;letter-spacing:.05em;padding-top:1px}
+.field-value{color:var(--text);word-break:break-word}
+#detail-urls{margin-top:10px;display:flex;flex-direction:column;gap:4px}
+#detail-close{position:absolute;top:10px;right:10px;width:28px;height:28px;border-radius:50%;background:var(--surface2);color:var(--text-dim);font-size:16px;display:flex;align-items:center;justify-content:center;z-index:2}
+#detail-close:hover{background:var(--border);color:var(--text)}
+#detail-nav{display:flex;justify-content:space-between;align-items:center;padding:10px 16px;border-top:1px solid var(--border);gap:8px}
+#detail-nav button{background:var(--surface2);border:1px solid var(--border);color:var(--text-dim);border-radius:var(--radius);padding:6px 14px;font-size:13px}
+#detail-nav button:hover{border-color:var(--amber);color:var(--amber)}
+#detail-counter{font-size:12px;color:var(--text-dimmer)}
+
+/* Lightbox */
+#lightbox{display:none;position:fixed;inset:0;z-index:300;background:rgba(0,0,0,.97);flex-direction:column;align-items:center;justify-content:center}
+#lightbox.open{display:flex}
+#lightbox-img{width:100vw;height:100dvh;object-fit:contain;touch-action:pinch-zoom;display:block}
+#lightbox-nav{position:absolute;bottom:16px;left:0;right:0;display:flex;justify-content:center;gap:12px;z-index:1}
+#lightbox-nav button{background:rgba(255,255,255,.12);border:1px solid rgba(255,255,255,.2);color:#fff;border-radius:var(--radius);padding:6px 16px;font-size:13px;backdrop-filter:blur(4px)}
+#lightbox-nav button:hover{background:rgba(232,160,32,.3);border-color:var(--amber);color:var(--amber)}
+#lightbox-info{position:absolute;bottom:52px;left:0;right:0;text-align:center;font-size:12px;color:rgba(255,255,255,.4);pointer-events:none;padding:0 16px}
+#lightbox-close{position:absolute;top:12px;right:16px;width:32px;height:32px;border-radius:50%;background:rgba(255,255,255,.1);color:#fff;font-size:18px;display:flex;align-items:center;justify-content:center;z-index:1}
+#lightbox-close:hover{background:rgba(255,255,255,.2)}
+
+/* Slideshow indicator */
+#slideshow-indicator{position:absolute;top:12px;left:50%;transform:translateX(-50%);font-size:13px;color:rgba(255,255,255,.7);display:none;background:rgba(0,0,0,.45);border:1px solid rgba(255,255,255,.15);border-radius:20px;padding:6px 14px;white-space:nowrap;cursor:pointer;user-select:none;backdrop-filter:blur(4px)}
+#slideshow-indicator.visible{display:block}
+#slideshow-indicator:active{background:rgba(232,160,32,.3);border-color:var(--amber)}
+
+/* Flag flash */
+@keyframes flagFlash{0%{transform:scale(1)}50%{transform:scale(1.4)}100%{transform:scale(1)}}
+.flag-flash{animation:flagFlash .3s ease}
+
+/* Kbd hint */
+#kbd-hint{position:fixed;bottom:12px;right:12px;background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:8px 12px;font-size:11px;color:var(--text-dimmer);line-height:1.8;pointer-events:none;opacity:.7}
+#kbd-hint kbd{background:var(--surface2);border:1px solid var(--border);border-radius:3px;padding:1px 5px;font-family:ui-monospace,monospace;font-size:10px;color:var(--text-dim)}
+
+#loading{flex:1;display:flex;align-items:center;justify-content:center;color:var(--text-dimmer);font-size:14px}
+
+@media(max-width:600px){
+  :root{--card-w:110px;--gap:5px}
+  #kbd-hint{display:none}
+  #detail-box{max-width:100%;border-radius:10px}
+  #detail-cover-col{width:100px;min-width:100px}
+}
+@media(max-width:380px){:root{--card-w:90px}}
+@media(prefers-reduced-motion:reduce){.card,.card-cover,.card-label,.flag-btn{transition:none}}
+</style>
+</head>
+<body>
+
+<div id="header">
+  <div id="header-top">
+    <div id="view-toggle">
+      <button class="btn active" id="btn-gallery" onclick="setView('gallery')">&#9638; Gallery</button>
+      <button class="btn" id="btn-table" onclick="setView('table')">&#9776; List</button>
+    </div>
+    <button class="btn" onclick="randomIssue()" title="Random title (T)">T Title</button>
+    <button class="btn" onclick="randomLargeCover()" title="Random large cover (R)">R Cover</button>
+    <button class="btn" id="btn-slideshow" onclick="toggleSlideshow()" title="Slideshow (S)">&#9654; Slide</button>
+    <span id="status"></span>
+  </div>
+  <div id="controls">
+    <div id="search-wrap">
+      <input type="search" id="search" class="ctrl-input" placeholder="Search title, publisher, year, notes&hellip;"
+        oninput="onSearchInput()" onfocus="showFilters()" />
+      <button id="search-clear" onclick="clearSearch()" title="Clear search">&times;</button>
+    </div>
+    <div id="filters">
+      <select id="pub-filter" class="ctrl-input" onchange="filterAndRender()"><option value="">All publishers</option></select>
+      <select id="year-filter" class="ctrl-input" onchange="filterAndRender()"><option value="">All years</option></select>
+      <select id="genre-filter" class="ctrl-input" onchange="filterAndRender()"><option value="">All genres</option></select>
+    </div>
+  </div>
+</div>
+
+<div id="loading">Loading collection&hellip;</div>
+<div id="grid-view" class="hidden"></div>
+<div id="table-view" class="hidden">
+  <table>
+    <thead><tr>
+      <th style="width:44px"></th>
+      <th onclick="sortBy(0)">Title <span class="sa">&#x2195;</span></th>
+      <th onclick="sortBy(1)" style="width:80px">Issue <span class="sa">&#x2195;</span></th>
+      <th onclick="sortBy(4)" style="width:130px">Publisher <span class="sa">&#x2195;</span></th>
+      <th onclick="sortBy(3)" style="width:70px">Year <span class="sa">&#x2195;</span></th>
+      <th onclick="sortBy(7)" style="width:90px">Condition <span class="sa">&#x2195;</span></th>
+    </tr></thead>
+    <tbody id="tbody"></tbody>
+  </table>
+</div>
+
+<!-- Detail -->
+<div id="detail" role="dialog" aria-modal="true">
+  <div id="detail-backdrop" onclick="closeDetail()"></div>
+  <div id="detail-box">
+    <button id="detail-close" onclick="closeDetail()" aria-label="Close">&times;</button>
+    <div id="detail-inner">
+      <div id="detail-cover-col">
+        <img id="detail-cover-img" src="" alt="Cover" onclick="openLightboxAt(detailIdx)" style="display:none">
+        <div id="detail-cover-placeholder">No cover</div>
+        <div id="detail-cover-actions">
+          <button class="btn" id="detail-flag-btn" onclick="toggleFlag()" style="font-size:11px">&#9870; Flag cover</button>
+        </div>
+      </div>
+      <div id="detail-fields">
+        <div id="detail-title"></div>
+        <div id="detail-issue"></div>
+        <div id="detail-rows"></div>
+        <div id="detail-urls"></div>
+      </div>
+    </div>
+    <div id="detail-nav">
+      <button onclick="detailNav(-1)">&#8592; Prev</button>
+      <span id="detail-counter"></span>
+      <button onclick="detailNav(1)">Next &#8594;</button>
+    </div>
+  </div>
+</div>
+
+<!-- Lightbox -->
+<div id="lightbox" onclick="handleLightboxClick(event)">
+  <div id="lightbox-info"></div>
+  <div id="slideshow-indicator" onclick="toggleSlideshowRandom()">&#9654; Slideshow</div>
+  <img id="lightbox-img" src="" alt="Cover">
+  <button id="lightbox-close" onclick="event.stopPropagation();closeLightbox()">&times;</button>
+  <div id="lightbox-nav" onclick="event.stopPropagation()">
+    <button onclick="lightboxNav(-1)">&#8592;</button>
+    <button onclick="openDetail(lightboxIdx)" title="View details (Return)">&#9776; Details</button>
+    <button onclick="flagFromLightbox()" id="lightbox-flag-btn">&#9870; Flag</button>
+    <button onclick="lightboxNav(1)">&#8594;</button>
+  </div>
+</div>
+
+<div id="kbd-hint">
+  <kbd>&larr;</kbd><kbd>&rarr;</kbd> navigate &nbsp;
+  <kbd>Return</kbd> detail/cover &nbsp;
+  <kbd>R</kbd> r.cover &nbsp;
+  <kbd>T</kbd> r.title &nbsp;
+  <kbd>F</kbd> flag &nbsp;
+  <kbd>S</kbd> slideshow &nbsp;
+  <kbd>Esc</kbd> close
+</div>
+
+<script>
+const COVERS_BASE = 'https://aarontheman.github.io/comics/covers/';
+const TSV_URL     = 'https://aarontheman.github.io/comics/data/comics.tsv';
+const C = {TITLE:0,ISSUE:1,MONTH:2,YEAR:3,PUB:4,GENRE:5,FORMAT:6,COND:7,COPIES:8,VALUE:9,NOTES1:10,NOTES2:11,URL1:12,CV_URL:13};
+
+let ALL=[], FILTERED=[], FLAGS={};
+let currentView='gallery', sortCol=0, sortAsc=true;
+let selectedIdx=-1, detailIdx=-1, lightboxIdx=-1;
+let slideshowTimer=null, slideshowRandom=false;
+
+// ── Parse ─────────────────────────────────────────────────────────────────────
+function parseTSV(text){
+  const lines=text.trim().split('\n');
+  const rows=[];
+  for(let i=0;i<lines.length;i++){
+    const cols=lines[i].split('\t');
+    if(i===0&&cols[0].toLowerCase().trim()==='title') continue;
+    if(cols.some(c=>c.trim())) rows.push(cols.map(c=>c.trim()));
+  }
+  return rows;
+}
+
+// ── Filename ──────────────────────────────────────────────────────────────────
+function coverFilename(row){
+  const title=row[C.TITLE]||'', issue=row[C.ISSUE]||'', pub=row[C.PUB]||'Unknown';
+  let padded=issue;
+  if(/^\d+$/.test(issue)) padded=issue.padStart(3,'0');
+  let name=padded?`${title} (${pub}) ${padded}.jpg`:`${title} (${pub}).jpg`;
+  return name.replace(/[/:\\?*"<>|]/g,'-');
+}
+function coverUrl(row){ return COVERS_BASE+encodeURIComponent(coverFilename(row)); }
+
+// ── Filters ───────────────────────────────────────────────────────────────────
+function populateFilters(){
+  const pubs=[...new Set(ALL.map(r=>r[C.PUB]).filter(Boolean))].sort();
+  const years=[...new Set(ALL.map(r=>r[C.YEAR]).filter(Boolean))].sort((a,b)=>b-a);
+  const genres=[...new Set(ALL.map(r=>r[C.GENRE]).filter(Boolean))].sort();
+  const ps=document.getElementById('pub-filter');
+  pubs.forEach(p=>{const o=document.createElement('option');o.value=p;o.textContent=p;ps.appendChild(o);});
+  const ys=document.getElementById('year-filter');
+  years.forEach(y=>{const o=document.createElement('option');o.value=y;o.textContent=y;ys.appendChild(o);});
+  const gs=document.getElementById('genre-filter');
+  genres.forEach(g=>{const o=document.createElement('option');o.value=g;o.textContent=g;gs.appendChild(o);});
+}
+
+function showFilters(){ document.getElementById('filters').classList.add('visible'); }
+
+function onSearchInput(){
+  const val=document.getElementById('search').value;
+  document.getElementById('search-clear').classList.toggle('visible',val.length>0);
+  filterAndRender();
+}
+
+function clearSearch(){
+  document.getElementById('search').value='';
+  document.getElementById('search-clear').classList.remove('visible');
+  filterAndRender();
+}
+
+document.addEventListener('click',e=>{
+  const controls=document.getElementById('controls');
+  if(!controls.contains(e.target)){
+    if(!document.getElementById('search').value)
+      document.getElementById('filters').classList.remove('visible');
+  }
+});
+
+function getFiltered(){
+  const q=document.getElementById('search').value.toLowerCase();
+  const pub=document.getElementById('pub-filter').value;
+  const yr=document.getElementById('year-filter').value;
+  const gen=document.getElementById('genre-filter').value;
+  return ALL.filter(r=>{
+    if(q&&!(r[C.TITLE]||'').toLowerCase().includes(q)
+        &&!(r[C.PUB]||'').toLowerCase().includes(q)
+        &&!(r[C.YEAR]||'').includes(q)
+        &&!(r[C.NOTES1]||'').toLowerCase().includes(q)
+        &&!(r[C.NOTES2]||'').toLowerCase().includes(q)) return false;
+    if(pub&&r[C.PUB]!==pub) return false;
+    if(yr&&r[C.YEAR]!==yr) return false;
+    if(gen&&r[C.GENRE]!==gen) return false;
+    return true;
+  });
+}
+
+function filterAndRender(){
+  FILTERED=getFiltered();
+  FILTERED.sort((a,b)=>{
+    const av=(a[sortCol]||'').toLowerCase(),bv=(b[sortCol]||'').toLowerCase();
+    const an=parseFloat(av),bn=parseFloat(bv);
+    const cmp=(!isNaN(an)&&!isNaN(bn))?an-bn:av.localeCompare(bv);
+    return sortAsc?cmp:-cmp;
+  });
+  selectedIdx=-1;
+  document.getElementById('status').textContent=
+    FILTERED.length.toLocaleString()+' of '+ALL.length.toLocaleString()+' issues';
+  if(currentView==='gallery') renderGallery();
+  else renderTable();
+}
+
+// ── Gallery ───────────────────────────────────────────────────────────────────
+function renderGallery(){
+  const grid=document.getElementById('grid-view');
+  if(!FILTERED.length){grid.innerHTML='<div class="empty" style="grid-column:1/-1">No matching issues.</div>';return;}
+  grid.innerHTML='';
+  FILTERED.forEach((row,i)=>{
+    const card=document.createElement('div');
+    card.className='card';
+    card.dataset.idx=i;
+    const fname=coverFilename(row);
+    const flagged=FLAGS[fname]?' flagged':'';
+    const title=esc(row[C.TITLE]||'—');
+    const issue=esc(row[C.ISSUE]||'');
+    const pub=esc(row[C.PUB]||'');
+    card.innerHTML=`
+      <img class="card-cover loading" data-src="${coverUrl(row)}" alt="${title}">
+      <div class="card-placeholder" style="display:none">
+        <div class="p-title">${title}</div>
+        <div class="p-issue">#${issue}</div>
+        <div class="p-pub">${pub}</div>
+      </div>
+      <div class="card-label">
+        <div class="cl-title">${title}</div>
+        <div class="cl-issue">#${issue}</div>
+      </div>
+      <button class="flag-btn${flagged}" onclick="event.stopPropagation();flagIdx(${i})" title="Flag cover (F)">&#9873;</button>
+    `;
+    card.addEventListener('click',()=>openDetail(i));
+    const img=card.querySelector('.card-cover');
+    const ph=card.querySelector('.card-placeholder');
+    const obs=new IntersectionObserver((entries,o)=>{
+      if(entries[0].isIntersecting){
+        img.src=img.dataset.src;
+        img.onload=()=>{img.classList.replace('loading','loaded');ph.style.display='none';};
+        img.onerror=()=>{img.style.display='none';ph.style.display='flex';};
+        o.disconnect();
+      }
+    },{rootMargin:'200px'});
+    obs.observe(card);
+    grid.appendChild(card);
+  });
+}
+
+// ── Table ─────────────────────────────────────────────────────────────────────
+function renderTable(){
+  const tbody=document.getElementById('tbody');
+  if(!FILTERED.length){tbody.innerHTML='<tr><td colspan="6" class="empty">No matching issues.</td></tr>';return;}
+  tbody.innerHTML=FILTERED.map((row,i)=>`
+    <tr onclick="openDetail(${i})">
+      <td class="thumb"><img src="${coverUrl(row)}" alt="" loading="lazy" onerror="this.style.display='none'"></td>
+      <td class="ti" title="${esc(row[C.TITLE])}">${esc(row[C.TITLE]||'—')}</td>
+      <td class="is">${esc(row[C.ISSUE]||'—')}</td>
+      <td class="pu">${esc(row[C.PUB]||'')}</td>
+      <td class="yr">${esc(row[C.YEAR]||'')}</td>
+      <td>${esc(row[C.COND]||'')}</td>
+    </tr>`).join('');
+}
+
+function sortBy(col){
+  sortAsc=(sortCol===col)?!sortAsc:true;
+  sortCol=col;
+  document.querySelectorAll('thead th').forEach((th,i)=>{
+    th.classList.toggle('sorted',i===col+1);
+    const sa=th.querySelector('.sa');
+    if(sa) sa.textContent=(i===col+1)?(sortAsc?'↑':'↓'):'↕';
+  });
+  filterAndRender();
+}
+
+// ── Detail ────────────────────────────────────────────────────────────────────
+function openDetail(idx){
+  detailIdx=idx; selectedIdx=idx;
+  const row=FILTERED[idx]; if(!row) return;
+  document.getElementById('detail-title').textContent=row[C.TITLE]||'—';
+  document.getElementById('detail-issue').textContent=
+    '#'+(row[C.ISSUE]||'')+(row[C.YEAR]?' · '+row[C.YEAR]:'');
+  const fields=[
+    ['Publisher',row[C.PUB]],['Month',row[C.MONTH]],['Year',row[C.YEAR]],
+    ['Genre',row[C.GENRE]],['Format',row[C.FORMAT]],['Condition',row[C.COND]],
+    ['Copies',row[C.COPIES]],['Value',row[C.VALUE]],
+    ['Notes',row[C.NOTES1]],['Notes 2',row[C.NOTES2]],
+  ].filter(([,v])=>v);
+  document.getElementById('detail-rows').innerHTML=fields.map(([l,v])=>
+    `<div class="field-row"><span class="field-label">${esc(l)}</span><span class="field-value">${esc(v)}</span></div>`
+  ).join('');
+  const urls=[];
+  if(row[C.URL1]) urls.push(`<a href="${esc(row[C.URL1])}" target="_blank" rel="noopener">&#9654; comics.org</a>`);
+  if(row[C.CV_URL]) urls.push(`<a href="${esc(row[C.CV_URL])}" target="_blank" rel="noopener">&#9654; Comic Vine</a>`);
+  document.getElementById('detail-urls').innerHTML=urls.join('');
+  const img=document.getElementById('detail-cover-img');
+  const ph=document.getElementById('detail-cover-placeholder');
+  img.style.display='none'; ph.style.display='flex';
+  img.onload=()=>{img.style.display='block';ph.style.display='none';};
+  img.onerror=()=>{img.style.display='none';ph.style.display='flex';};
+  img.src=coverUrl(row);
+  updateDetailFlag();
+  document.getElementById('detail-counter').textContent=(idx+1)+' / '+FILTERED.length;
+  document.getElementById('detail').classList.add('open');
+  document.body.style.overflow='hidden';
+}
+
+function closeDetail(){
+  document.getElementById('detail').classList.remove('open');
+  document.body.style.overflow='';
+  detailIdx=-1;
+}
+
+function detailNav(dir){
+  if(detailIdx<0) return;
+  const next=detailIdx+dir;
+  if(next>=0&&next<FILTERED.length) openDetail(next);
+}
+
+function updateDetailFlag(){
+  if(detailIdx<0) return;
+  const fname=coverFilename(FILTERED[detailIdx]);
+  const fb=document.getElementById('detail-flag-btn');
+  fb.textContent=FLAGS[fname]?'⚑ Flagged':'⚐ Flag cover';
+  fb.style.color=FLAGS[fname]?'#e05050':'';
+}
+
+// ── Lightbox ──────────────────────────────────────────────────────────────────
+function openLightboxAt(idx){
+  if(idx<0||idx>=FILTERED.length) return;
+  lightboxIdx=idx;
+  const row=FILTERED[idx];
+  document.getElementById('lightbox-img').src=coverUrl(row);
+  document.getElementById('lightbox-info').textContent=
+    (row[C.TITLE]||'')+(row[C.ISSUE]?' #'+row[C.ISSUE]:'')+(row[C.YEAR]?' · '+row[C.YEAR]:'');
+  updateLightboxFlag();
+  document.getElementById('lightbox').classList.add('open');
+}
+
+function closeLightbox(){
+  document.getElementById('lightbox').classList.remove('open');
+  stopSlideshow();
+}
+
+function handleLightboxClick(e){
+  // Click on image itself or background closes; nav buttons handle themselves
+  if(e.target===document.getElementById('lightbox')||
+     e.target===document.getElementById('lightbox-img')){
+    closeLightbox();
+  }
+}
+
+function lightboxNav(dir){
+  if(lightboxIdx<0) return;
+  const next=lightboxIdx+dir;
+  if(next>=0&&next<FILTERED.length) openLightboxAt(next);
+  else if(next<0) openLightboxAt(FILTERED.length-1);
+  else openLightboxAt(0);
+}
+
+function updateLightboxFlag(){
+  if(lightboxIdx<0) return;
+  const fname=coverFilename(FILTERED[lightboxIdx]);
+  const fb=document.getElementById('lightbox-flag-btn');
+  fb.textContent=FLAGS[fname]?'⚑ Flagged':'⚐ Flag';
+  fb.style.color=FLAGS[fname]?'#e05050':'';
+}
+
+function flagFromLightbox(){
+  if(lightboxIdx<0) return;
+  flagIdx(lightboxIdx);
+  updateLightboxFlag();
+}
+
+// ── Flag ──────────────────────────────────────────────────────────────────────
+function flagIdx(idx){
+  const row=FILTERED[idx]; if(!row) return;
+  const fname=coverFilename(row);
+  FLAGS[fname]=!FLAGS[fname];
+  saveFlags();
+  // Update card
+  const card=document.querySelector(`.card[data-idx="${idx}"]`);
+  if(card){
+    const btn=card.querySelector('.flag-btn');
+    btn.classList.toggle('flagged',FLAGS[fname]);
+    btn.classList.add('flag-flash');
+    setTimeout(()=>btn.classList.remove('flag-flash'),400);
+  }
+  // Update detail if open
+  if(detailIdx===idx) updateDetailFlag();
+  // Update lightbox if open
+  if(lightboxIdx===idx) updateLightboxFlag();
+}
+
+function toggleFlag(){
+  if(detailIdx>=0) flagIdx(detailIdx);
+}
+
+function flagCurrent(){
+  const lb=document.getElementById('lightbox').classList.contains('open');
+  const det=document.getElementById('detail').classList.contains('open');
+  if(lb&&lightboxIdx>=0) flagIdx(lightboxIdx);
+  else if(det&&detailIdx>=0) flagIdx(detailIdx);
+  else if(selectedIdx>=0) flagIdx(selectedIdx);
+}
+
+function saveFlags(){ try{localStorage.setItem('comic_flags',JSON.stringify(FLAGS));}catch(e){} }
+function loadFlags(){ try{FLAGS=JSON.parse(localStorage.getItem('comic_flags')||'{}');}catch(e){FLAGS={};} }
+
+// ── Random ────────────────────────────────────────────────────────────────────
+function randomIssue(){
+  if(!FILTERED.length) return;
+  const idx=Math.floor(Math.random()*FILTERED.length);
+  openDetail(idx);
+  const card=document.querySelector(`.card[data-idx="${idx}"]`);
+  if(card) card.scrollIntoView({behavior:'smooth',block:'center'});
+}
+
+function randomLargeCover(){
+  if(!FILTERED.length) return;
+  const idx=Math.floor(Math.random()*FILTERED.length);
+  openLightboxAt(idx);
+}
+
+// ── Slideshow ─────────────────────────────────────────────────────────────────
+function toggleSlideshowRandom(){
+  if(!slideshowTimer) return;
+  slideshowRandom=!slideshowRandom;
+  updateSlideshowIndicator();
+}
+
+function updateSlideshowIndicator(){
+  document.getElementById('slideshow-indicator').textContent=
+    slideshowRandom?'⏵ Slideshow · Random ●':'⏵ Slideshow · tap to randomise';
+}
+
+function toggleSlideshow(){
+  if(slideshowTimer){ stopSlideshow(); return; }
+  startSlideshow();
+}
+
+function startSlideshow(){
+  if(!FILTERED.length) return;
+  if(lightboxIdx<0) openLightboxAt(0);
+  if(window.requestMotionIfNeeded) requestMotionIfNeeded();
+  document.getElementById('slideshow-indicator').classList.add('visible');
+  document.getElementById('btn-slideshow').classList.add('active');
+  document.getElementById('btn-slideshow').innerHTML='&#9646;&#9646; Slide';
+  updateSlideshowIndicator();
+  slideshowTimer=setInterval(()=>{
+    if(slideshowRandom) openLightboxAt(Math.floor(Math.random()*FILTERED.length));
+    else lightboxNav(1);
+  },2000);
+}
+
+function stopSlideshow(){
+  clearInterval(slideshowTimer); slideshowTimer=null; slideshowRandom=false;
+  document.getElementById('slideshow-indicator').classList.remove('visible');
+  const btn=document.getElementById('btn-slideshow');
+  btn.classList.remove('active');
+  btn.innerHTML='&#9654; Slide';
+}
+
+// ── View ──────────────────────────────────────────────────────────────────────
+function setView(v){
+  currentView=v;
+  document.getElementById('grid-view').classList.toggle('hidden',v!=='gallery');
+  document.getElementById('table-view').classList.toggle('hidden',v!=='table');
+  document.getElementById('btn-gallery').classList.toggle('active',v==='gallery');
+  document.getElementById('btn-table').classList.toggle('active',v==='table');
+  filterAndRender();
+}
+
+// ── Keyboard ──────────────────────────────────────────────────────────────────
+document.addEventListener('keydown',e=>{
+  const inInput=['INPUT','SELECT','TEXTAREA'].includes(document.activeElement.tagName);
+  const detailOpen=document.getElementById('detail').classList.contains('open');
+  const lightboxOpen=document.getElementById('lightbox').classList.contains('open');
+
+  if(lightboxOpen){
+    if(e.key==='Escape'){e.preventDefault();closeLightbox();return;}
+    if(e.key==='ArrowLeft'){e.preventDefault();lightboxNav(-1);return;}
+    if(e.key==='ArrowRight'){e.preventDefault();lightboxNav(1);return;}
+    if(e.key==='Enter'||e.key==='Return'){e.preventDefault();
+      closeLightbox();if(lightboxIdx>=0)openDetail(lightboxIdx);return;}
+    if(e.key==='f'||e.key==='F'){flagCurrent();return;}
+    if(e.key==='r'||e.key==='R'){
+      if(slideshowTimer){ toggleSlideshowRandom(); }
+      else randomLargeCover();
+      return;
+    }
+    if(e.key==='s'||e.key==='S'){toggleSlideshow();return;}
+    return;
+  }
+
+  if(detailOpen){
+    if(e.key==='Escape'){e.preventDefault();closeDetail();return;}
+    if(e.key==='ArrowLeft'){e.preventDefault();detailNav(-1);return;}
+    if(e.key==='ArrowRight'){e.preventDefault();detailNav(1);return;}
+    if(e.key==='Enter'||e.key==='Return'){e.preventDefault();
+      if(detailIdx>=0)openLightboxAt(detailIdx);return;}
+    if(e.key==='f'||e.key==='F'){flagCurrent();return;}
+    return;
+  }
+
+  if(inInput) return;
+
+  if(e.key==='ArrowRight'){
+    e.preventDefault();
+    selectedIdx=selectedIdx<FILTERED.length-1?selectedIdx+1:0;
+    highlightCard(selectedIdx);
+  } else if(e.key==='ArrowLeft'){
+    e.preventDefault();
+    selectedIdx=selectedIdx>0?selectedIdx-1:FILTERED.length-1;
+    highlightCard(selectedIdx);
+  } else if(e.key==='Enter'||e.key==='Return'){
+    if(selectedIdx>=0) openDetail(selectedIdx);
+  } else if(e.key==='r'||e.key==='R'){
+    randomLargeCover();
+  } else if(e.key==='t'||e.key==='T'){
+    randomIssue();
+  } else if(e.key==='f'||e.key==='F'){
+    flagCurrent();
+  } else if(e.key==='s'||e.key==='S'){
+    startSlideshow();
+  } else if(e.key==='Escape'){
+    closeDetail();
+  }
+});
+
+function highlightCard(idx){
+  document.querySelectorAll('.card.selected').forEach(c=>c.classList.remove('selected'));
+  const card=document.querySelector(`.card[data-idx="${idx}"]`);
+  if(card){card.classList.add('selected');card.scrollIntoView({behavior:'smooth',block:'nearest'});}
+}
+
+// ── Touch ─────────────────────────────────────────────────────────────────────
+let touchStartX=0,touchStartY=0;
+document.addEventListener('touchstart',e=>{touchStartX=e.touches[0].clientX;touchStartY=e.touches[0].clientY;},{passive:true});
+document.addEventListener('touchend',e=>{
+  const dx=e.changedTouches[0].clientX-touchStartX;
+  const dy=e.changedTouches[0].clientY-touchStartY;
+  if(Math.abs(dx)<40||Math.abs(dy)>Math.abs(dx)) return;
+  const lb=document.getElementById('lightbox').classList.contains('open');
+  const det=document.getElementById('detail').classList.contains('open');
+  if(lb){ if(dx<0) lightboxNav(1); else lightboxNav(-1); }
+  else if(det){ if(dx<0) detailNav(1); else detailNav(-1); }
+},{passive:true});
+
+let lastTap=0;
+document.addEventListener('touchend',e=>{
+  const now=Date.now();
+  const lb=document.getElementById('lightbox').classList.contains('open');
+  const det=document.getElementById('detail').classList.contains('open');
+  if(now-lastTap<300&&!lb&&!det) randomLargeCover();
+  lastTap=now;
+},{passive:true});
+
+// ── Shake to toggle random (iOS) ──────────────────────────────────────────────
+(function(){
+  let lastX=null,lastY=null,lastZ=null,lastShake=0;
+  const THRESHOLD=25, COOLDOWN=1500;
+
+  function attachMotion(){
+    window.addEventListener('devicemotion',e=>{
+      const acc=e.accelerationIncludingGravity;
+      if(!acc) return;
+      const {x,y,z}=acc;
+      if(lastX===null){lastX=x;lastY=y;lastZ=z;return;}
+      const delta=Math.abs(x-lastX)+Math.abs(y-lastY)+Math.abs(z-lastZ);
+      lastX=x;lastY=y;lastZ=z;
+      const now=Date.now();
+      if(delta>THRESHOLD&&now-lastShake>COOLDOWN&&slideshowTimer){
+        lastShake=now;
+        slideshowRandom=!slideshowRandom;
+        updateSlideshowIndicator();
+        if(navigator.vibrate) navigator.vibrate(50);
+      }
+    });
+  }
+
+  // Expose so startSlideshow can request permission
+  window.requestMotionIfNeeded=function(){
+    if(typeof DeviceMotionEvent==='undefined') return;
+    if(typeof DeviceMotionEvent.requestPermission==='function'){
+      DeviceMotionEvent.requestPermission()
+        .then(state=>{ if(state==='granted') attachMotion(); })
+        .catch(()=>{});
+    } else {
+      // Non-iOS or older iOS — just attach directly
+      attachMotion();
+    }
+  };
+})();
+function esc(s){ return String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;'); }
+
+// ── Init ──────────────────────────────────────────────────────────────────────
+async function init(){
+  loadFlags();
+  try{
+    const resp=await fetch(TSV_URL);
+    if(!resp.ok) throw new Error('HTTP '+resp.status);
+    const text=await resp.text();
+    ALL=parseTSV(text);
+    document.getElementById('loading').style.display='none';
+    document.getElementById('grid-view').classList.remove('hidden');
+    populateFilters();
+    filterAndRender();
+  } catch(e){
+    document.getElementById('loading').textContent=
+      'Could not load collection data. Make sure comics.tsv is in the data/ folder on GitHub. ('+e.message+')';
+  }
+}
+init();
+</script>
+</body>
+</html>

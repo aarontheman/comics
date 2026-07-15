@@ -1,0 +1,533 @@
+<!DOCTYPE html>
+<html lang="en">
+<!--
+  comic_museum.html
+  =================
+  Comic Cover Museum — Golden Age Slideshow
+  Version: 1.1.0
+  Date:    2026-07-12
+
+  PURPOSE:
+    A cinematic fullscreen slideshow of vintage comic covers fetched
+    live from Comic Vine. No local data needed — just set a year range
+    and go. Hosted at: aarontheman.github.io/comics/comic_museum.html
+
+  PROXY:
+    API calls are routed through a Cloudflare Worker proxy to avoid
+    CORS restrictions. The proxy handles the API key server-side.
+    Proxy URL: https://comics-proxy.zoopiedoop.workers.dev
+
+  Version History:
+    v1.0.0  2026-06-01  Initial release
+    v1.1.0  2026-07-12  Faster start (plays after first 100 covers load),
+                        background prefetch, pause button added,
+                        reduced max covers from 2000 to 500,
+                        removed API key field (proxy handles it)
+-->
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Comic Cover Museum</title>
+<style>
+*,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+:root{
+  --bg:#0a0a0a;--surface:#141414;--border:#2a2a2a;
+  --amber:#e8a020;--text:#e0ddd5;--text-dim:#888;--radius:6px;
+}
+html,body{height:100%;background:var(--bg);color:var(--text);
+  font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;
+  overflow:hidden}
+
+/* ── Setup screen ─────────────────────────────────────────────────── */
+#setup{position:fixed;inset:0;z-index:100;display:flex;
+  align-items:center;justify-content:center;background:var(--bg);
+  transition:opacity .6s}
+#setup.hidden{opacity:0;pointer-events:none}
+#setup-box{background:var(--surface);border:1px solid var(--border);
+  border-radius:12px;padding:2rem;width:min(420px,90vw)}
+#setup-box h1{font-size:1.3rem;font-weight:700;color:var(--amber);
+  letter-spacing:.06em;margin-bottom:.25rem}
+#setup-box .sub{font-size:13px;color:var(--text-dim);margin-bottom:1.5rem}
+.field{margin-bottom:1rem}
+.field label{display:block;font-size:11px;text-transform:uppercase;
+  letter-spacing:.08em;color:var(--text-dim);margin-bottom:5px}
+.field input,.field select{width:100%;background:#1e1e1e;
+  border:1px solid var(--border);color:var(--text);border-radius:var(--radius);
+  padding:8px 10px;font-size:14px;outline:none}
+.field input:focus,.field select:focus{border-color:var(--amber)}
+.field-row{display:flex;gap:10px}
+.field-row .field{flex:1}
+#start-btn{width:100%;margin-top:1.5rem;background:var(--amber);color:#111;
+  border:none;border-radius:var(--radius);padding:11px;font-size:15px;
+  font-weight:700;cursor:pointer;letter-spacing:.04em;transition:opacity .15s}
+#start-btn:hover{opacity:.88}
+#start-btn:disabled{opacity:.4;cursor:default}
+#setup-error{font-size:12px;color:#e05050;margin-top:8px;min-height:16px}
+#loading-note{font-size:11px;color:var(--text-dim);margin-top:8px;
+  font-style:italic}
+
+/* ── Museum screen ────────────────────────────────────────────────── */
+#museum{position:fixed;inset:0;z-index:50;display:flex;
+  align-items:center;justify-content:center;cursor:pointer}
+#cover-wrap{position:relative;width:100%;height:100%;display:flex;
+  align-items:center;justify-content:center}
+#cover-img{max-width:100vw;max-height:100dvh;width:100vw;height:100dvh;
+  object-fit:contain;display:block;transition:opacity .5s}
+#cover-img.fade{opacity:0}
+
+/* Caption */
+#caption{position:absolute;bottom:0;left:0;right:0;
+  background:linear-gradient(transparent,rgba(0,0,0,.9) 60%);
+  padding:40px 24px 20px;pointer-events:none;transition:opacity .4s}
+#caption-title{font-size:clamp(14px,2.5vw,22px);font-weight:700;
+  margin-bottom:3px}
+#caption-meta{font-size:clamp(11px,1.8vw,15px);color:var(--text-dim)}
+#caption.hidden{opacity:0}
+
+/* Controls */
+#controls{position:absolute;top:0;left:0;right:0;padding:14px 20px;
+  display:flex;align-items:center;gap:8px;flex-wrap:wrap;
+  background:linear-gradient(rgba(0,0,0,.7),transparent);
+  opacity:0;transition:opacity .3s}
+#museum:hover #controls,#controls:focus-within{opacity:1}
+.ctrl-btn{background:rgba(255,255,255,.1);border:1px solid rgba(255,255,255,.15);
+  color:#fff;border-radius:var(--radius);padding:5px 12px;font-size:12px;
+  cursor:pointer;backdrop-filter:blur(4px);white-space:nowrap;
+  transition:background .15s,border-color .15s}
+.ctrl-btn:hover{background:rgba(232,160,32,.3);border-color:var(--amber);
+  color:var(--amber)}
+.ctrl-btn.active{background:rgba(232,160,32,.25);border-color:var(--amber);
+  color:var(--amber)}
+#ctrl-status{font-size:12px;color:rgba(255,255,255,.5);margin-right:auto}
+#speed-select{background:rgba(255,255,255,.1);border:1px solid rgba(255,255,255,.15);
+  color:#fff;border-radius:var(--radius);padding:5px 8px;font-size:12px;
+  cursor:pointer;backdrop-filter:blur(4px)}
+
+/* Progress bar */
+#progress{position:absolute;bottom:0;left:0;height:2px;
+  background:var(--amber);width:0%;transition:none;pointer-events:none}
+
+/* Loading overlay */
+#load-overlay{position:absolute;inset:0;display:flex;flex-direction:column;
+  align-items:center;justify-content:center;gap:12px;
+  background:rgba(0,0,0,.7);pointer-events:none}
+#load-overlay.hidden{display:none}
+#load-msg{font-size:14px;color:var(--text-dim)}
+#load-bar-wrap{width:200px;height:3px;background:rgba(255,255,255,.1);
+  border-radius:2px;overflow:hidden}
+#load-bar{height:100%;background:var(--amber);width:0%;
+  transition:width .3s}
+
+/* Cover count */
+#cover-count{position:absolute;bottom:60px;right:16px;
+  font-size:11px;color:rgba(255,255,255,.3);pointer-events:none;
+  font-family:ui-monospace,monospace}
+
+/* Kbd hint */
+#kbd-hint{position:absolute;bottom:16px;right:16px;
+  font-size:10px;color:rgba(255,255,255,.2);pointer-events:none;
+  line-height:1.8;text-align:right}
+@media(max-width:600px){#kbd-hint{display:none}}
+</style>
+</head>
+<body>
+
+<!-- Setup -->
+<div id="setup">
+  <div id="setup-box">
+    <h1>&#9632; COMIC COVER MUSEUM</h1>
+    <p class="sub">A cinematic slideshow of vintage covers from Comic Vine</p>
+
+    <div class="field-row">
+      <div class="field">
+        <label>From year</label>
+        <input type="number" id="year-from" value="1930" min="1900" max="2024">
+      </div>
+      <div class="field">
+        <label>To year</label>
+        <input type="number" id="year-to" value="1955" min="1900" max="2024">
+      </div>
+    </div>
+
+    <div class="field">
+      <label>Publisher (optional)</label>
+      <select id="publisher-select">
+        <option value="">All publishers</option>
+        <option value="DC Comics">DC Comics</option>
+        <option value="Timely Comics">Timely Comics (Marvel precursor)</option>
+        <option value="Fawcett Comics">Fawcett Comics</option>
+        <option value="Quality Comics">Quality Comics</option>
+        <option value="Fiction House">Fiction House</option>
+        <option value="Dell Comics">Dell Comics</option>
+        <option value="EC Comics">EC Comics</option>
+        <option value="Harvey Comics">Harvey Comics</option>
+        <option value="Archie Comics">Archie Comics</option>
+        <option value="Charlton Comics">Charlton Comics</option>
+      </select>
+    </div>
+
+    <div class="field">
+      <label>Sort order</label>
+      <select id="sort-select">
+        <option value="random">Random</option>
+        <option value="date_asc">Chronological (oldest first)</option>
+        <option value="date_desc">Reverse chronological</option>
+      </select>
+    </div>
+
+    <div id="setup-error"></div>
+    <button id="start-btn" onclick="startMuseum()">&#9654; Open the Museum</button>
+    <p id="loading-note"></p>
+  </div>
+</div>
+
+<!-- Museum -->
+<div id="museum" style="display:none" onclick="handleMuseumClick(event)">
+  <div id="cover-wrap">
+    <img id="cover-img" src="" alt="Comic cover" class="fade">
+    <div id="load-overlay">
+      <div id="load-msg">Loading first covers…</div>
+      <div id="load-bar-wrap"><div id="load-bar"></div></div>
+    </div>
+    <div id="caption" class="hidden">
+      <div id="caption-title"></div>
+      <div id="caption-meta"></div>
+    </div>
+    <div id="cover-count"></div>
+    <div id="progress"></div>
+  </div>
+
+  <div id="controls" onclick="event.stopPropagation()">
+    <span id="ctrl-status"></span>
+    <select id="speed-select" onchange="updateSpeed()" title="Speed">
+      <option value="2000">2s</option>
+      <option value="3000" selected>3s</option>
+      <option value="5000">5s</option>
+      <option value="8000">8s</option>
+      <option value="0">Manual</option>
+    </select>
+    <button class="ctrl-btn" id="btn-play" onclick="togglePlay()">&#9646;&#9646; Pause</button>
+    <button class="ctrl-btn" onclick="prevCover()">&#8592;</button>
+    <button class="ctrl-btn" onclick="nextCover()">&#8594;</button>
+    <button class="ctrl-btn" id="btn-random" onclick="toggleRandom()">&#10227; Random</button>
+    <button class="ctrl-btn" onclick="showCaption()">&#9432; Info</button>
+    <button class="ctrl-btn" onclick="backToSetup()">&#9776; Settings</button>
+  </div>
+
+  <div id="kbd-hint">
+    &#8592;&#8594; navigate &nbsp;
+    Space pause &nbsp;
+    R random &nbsp;
+    I info &nbsp;
+    Esc settings
+  </div>
+</div>
+
+<script>
+// ── Config ────────────────────────────────────────────────────────────────────
+// Cloudflare Worker proxy — handles API key and CORS server-side
+const PROXY_BASE = 'https://comics-proxy.zoopiedoop.workers.dev/api';
+
+// Start playback after this many covers are loaded (feels instant)
+const START_AFTER = 20;
+// Maximum total covers to fetch (keeps CV load reasonable)
+const MAX_COVERS  = 500;
+
+// ── State ─────────────────────────────────────────────────────────────────────
+let issues       = [];       // all fetched issues
+let currentIdx   = 0;        // index of currently shown cover
+let isPlaying    = true;
+let isRandom     = true;
+let slideshowTimer = null;
+let speed        = 3000;
+let captionVisible = false;
+let fetchDone    = false;    // true when background fetch is complete
+
+// ── Setup ─────────────────────────────────────────────────────────────────────
+async function startMuseum() {
+  const yearFrom = parseInt(document.getElementById('year-from').value);
+  const yearTo   = parseInt(document.getElementById('year-to').value);
+  if (isNaN(yearFrom) || isNaN(yearTo) || yearFrom > yearTo) {
+    document.getElementById('setup-error').textContent =
+      'Please enter a valid year range.';
+    return;
+  }
+
+  const btn = document.getElementById('start-btn');
+  btn.disabled = true;
+  btn.textContent = 'Loading first covers…';
+  document.getElementById('setup-error').textContent = '';
+  document.getElementById('loading-note').textContent =
+    'Playback starts after the first ' + START_AFTER + ' covers load. ' +
+    'More load in the background.';
+
+  try {
+    // Show museum immediately, load overlay on top
+    document.getElementById('setup').classList.add('hidden');
+    document.getElementById('museum').style.display = 'block';
+
+    // Start background fetch — plays as soon as START_AFTER covers arrive
+    await fetchIssues(yearFrom, yearTo);
+
+  } catch(e) {
+    document.getElementById('setup').classList.remove('hidden');
+    document.getElementById('museum').style.display = 'none';
+    document.getElementById('setup-error').textContent = 'Error: ' + e.message;
+    btn.disabled = false;
+    btn.textContent = '▶ Open the Museum';
+    document.getElementById('loading-note').textContent = '';
+  }
+}
+
+// ── Fetch covers from CV via proxy ────────────────────────────────────────────
+async function fetchIssues(yearFrom, yearTo) {
+  const publisher = document.getElementById('publisher-select').value;
+  const sortOrder = document.getElementById('sort-select').value;
+  const dateFrom  = `${yearFrom}-01-01 00:00:00`;
+  const dateTo    = `${yearTo}-12-31 23:59:59`;
+  let filter = `cover_date:${dateFrom}|${dateTo}`;
+  if (publisher) filter += `,volume.publisher.name:${publisher}`;
+  const cvSort = sortOrder === 'date_desc' ? 'cover_date:desc' : 'cover_date:asc';
+
+  let started  = false;
+  let offset   = 0;
+  let total    = 0;
+  let fetched  = 0;
+
+  while (fetched < MAX_COVERS) {
+    const data = await cvFetch('issues', {
+      filter,
+      sort: cvSort,
+      field_list: 'id,name,issue_number,cover_date,image,volume',
+      limit: 100,
+      offset,
+    });
+
+    if (!total) total = Math.min(data.number_of_total_results, MAX_COVERS);
+
+    const batch = (data.results || []).filter(i => i.image?.medium_url);
+    issues = issues.concat(batch);
+    fetched += 100;
+    offset  += 100;
+
+    // Update progress bar
+    const pct = Math.min(100, Math.round((issues.length / Math.min(total, MAX_COVERS)) * 100));
+    document.getElementById('load-bar').style.width = pct + '%';
+    document.getElementById('load-msg').textContent =
+      `Loading… ${issues.length} of ${Math.min(total, MAX_COVERS)} covers`;
+
+    // Start playback as soon as START_AFTER covers are available
+    if (!started && issues.length >= START_AFTER) {
+      started = true;
+      if (document.getElementById('sort-select').value === 'random') {
+        isRandom = true;
+      }
+      document.getElementById('load-overlay').classList.add('hidden');
+      currentIdx = 0;
+      showCover(currentIdx);
+      if (speed > 0) startSlideshow();
+      updateCtrlStatus();
+    }
+
+    if (offset >= total || fetched >= MAX_COVERS) break;
+
+    // Pause between pages to respect CV rate limit
+    await sleep(1500);
+  }
+
+  fetchDone = true;
+  updateCtrlStatus();
+}
+
+async function cvFetch(endpoint, params) {
+  params.format = 'json';
+  const qs  = Object.entries(params)
+    .map(([k,v]) => `${k}=${encodeURIComponent(v)}`).join('&');
+  const url = `${PROXY_BASE}/${endpoint}/?${qs}`;
+  const resp = await fetch(url);
+  if (!resp.ok) throw new Error(`Proxy error: HTTP ${resp.status}`);
+  const data = await resp.json();
+  if (data.error && data.error !== 'OK')
+    throw new Error(`CV API: ${data.error}`);
+  return data;
+}
+
+// ── Display ───────────────────────────────────────────────────────────────────
+function showCover(idx) {
+  if (!issues.length) return;
+  const issue = issues[idx];
+  const img   = document.getElementById('cover-img');
+  img.classList.add('fade');
+  const newImg = new Image();
+  newImg.onload = () => {
+    img.src = newImg.src;
+    img.classList.remove('fade');
+    updateCaption(issue);
+    updateProgress();
+    document.getElementById('cover-count').textContent =
+      `${idx + 1} / ${issues.length}${fetchDone ? '' : '+'}`;
+  };
+  newImg.onerror = () => nextCover();
+  newImg.src = issue.image?.super_url || issue.image?.medium_url || '';
+}
+
+function updateCaption(issue) {
+  const title    = issue.volume?.name || issue.name || 'Unknown';
+  const issueNum = issue.issue_number ? ` #${issue.issue_number}` : '';
+  const year     = issue.cover_date ? issue.cover_date.slice(0,4) : '';
+  const month    = issue.cover_date ? monthName(issue.cover_date.slice(5,7)) : '';
+  document.getElementById('caption-title').textContent = title + issueNum;
+  document.getElementById('caption-meta').textContent =
+    [month, year].filter(Boolean).join(' ');
+  if (captionVisible)
+    document.getElementById('caption').classList.remove('hidden');
+}
+
+function monthName(mm) {
+  const m=['','Jan','Feb','Mar','Apr','May','Jun',
+           'Jul','Aug','Sep','Oct','Nov','Dec'];
+  return m[parseInt(mm)] || '';
+}
+
+function showCaption() {
+  captionVisible = !captionVisible;
+  document.getElementById('caption').classList.toggle('hidden', !captionVisible);
+}
+
+function updateCtrlStatus() {
+  document.getElementById('ctrl-status').textContent =
+    `${issues.length}${fetchDone ? '' : '+'} covers`;
+}
+
+// ── Navigation ────────────────────────────────────────────────────────────────
+function nextCover() {
+  if (!issues.length) return;
+  currentIdx = isRandom
+    ? Math.floor(Math.random() * issues.length)
+    : (currentIdx + 1) % issues.length;
+  showCover(currentIdx);
+}
+
+function prevCover() {
+  if (!issues.length) return;
+  currentIdx = isRandom
+    ? Math.floor(Math.random() * issues.length)
+    : (currentIdx - 1 + issues.length) % issues.length;
+  showCover(currentIdx);
+}
+
+// ── Playback ──────────────────────────────────────────────────────────────────
+function startSlideshow() {
+  stopSlideshow();
+  if (speed <= 0) return;
+  slideshowTimer = setInterval(nextCover, speed);
+  startProgress();
+}
+
+function stopSlideshow() {
+  clearInterval(slideshowTimer);
+  slideshowTimer = null;
+  stopProgress();
+}
+
+function togglePlay() {
+  isPlaying = !isPlaying;
+  const btn = document.getElementById('btn-play');
+  if (isPlaying) {
+    btn.textContent = '⏸ Pause';
+    startSlideshow();
+  } else {
+    btn.textContent = '▶ Play';
+    stopSlideshow();
+  }
+}
+
+function toggleRandom() {
+  isRandom = !isRandom;
+  document.getElementById('btn-random').textContent =
+    isRandom ? '⟳ Random' : '⟳ Sequential';
+  document.getElementById('btn-random').classList.toggle('active', isRandom);
+}
+
+function updateSpeed() {
+  speed = parseInt(document.getElementById('speed-select').value);
+  if (isPlaying) startSlideshow();
+}
+
+// ── Progress bar ──────────────────────────────────────────────────────────────
+function startProgress() {
+  if (speed <= 0) return;
+  const bar = document.getElementById('progress');
+  bar.style.transition = 'none';
+  bar.style.width = '0%';
+  requestAnimationFrame(() => requestAnimationFrame(() => {
+    bar.style.transition = `width ${speed}ms linear`;
+    bar.style.width = '100%';
+  }));
+}
+
+function stopProgress() {
+  const bar = document.getElementById('progress');
+  bar.style.transition = 'none';
+  bar.style.width = '0%';
+}
+
+function updateProgress() {
+  if (isPlaying && speed > 0) startProgress();
+}
+
+// ── Interaction ───────────────────────────────────────────────────────────────
+function handleMuseumClick(e) {
+  if (e.target === document.getElementById('cover-img') ||
+      e.target === document.getElementById('cover-wrap')) {
+    togglePlay();
+  }
+}
+
+function backToSetup() {
+  stopSlideshow();
+  issues = [];
+  fetchDone = false;
+  currentIdx = 0;
+  document.getElementById('museum').style.display = 'none';
+  document.getElementById('setup').classList.remove('hidden');
+  document.getElementById('start-btn').disabled = false;
+  document.getElementById('start-btn').textContent = '▶ Open the Museum';
+  document.getElementById('loading-note').textContent = '';
+  document.getElementById('load-overlay').classList.remove('hidden');
+  document.getElementById('load-bar').style.width = '0%';
+}
+
+// ── Keyboard ──────────────────────────────────────────────────────────────────
+document.addEventListener('keydown', e => {
+  if (document.getElementById('museum').style.display === 'none') return;
+  if (['INPUT','SELECT','TEXTAREA']
+      .includes(document.activeElement.tagName)) return;
+  switch(e.key) {
+    case 'ArrowRight': e.preventDefault(); nextCover(); break;
+    case 'ArrowLeft':  e.preventDefault(); prevCover(); break;
+    case ' ':          e.preventDefault(); togglePlay(); break;
+    case 'r': case 'R': toggleRandom(); break;
+    case 'i': case 'I': showCaption(); break;
+    case 'Escape': backToSetup(); break;
+  }
+});
+
+// ── Touch / swipe ─────────────────────────────────────────────────────────────
+let touchStartX = 0, touchStartY = 0;
+document.addEventListener('touchstart', e => {
+  touchStartX = e.touches[0].clientX;
+  touchStartY = e.touches[0].clientY;
+}, {passive:true});
+document.addEventListener('touchend', e => {
+  const dx = e.changedTouches[0].clientX - touchStartX;
+  const dy = e.changedTouches[0].clientY - touchStartY;
+  if (Math.abs(dx) < 40 || Math.abs(dy) > Math.abs(dx)) return;
+  if (dx < 0) nextCover(); else prevCover();
+}, {passive:true});
+
+// ── Utils ─────────────────────────────────────────────────────────────────────
+function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
+</script>
+</body>
+</html>
