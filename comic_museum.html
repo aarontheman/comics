@@ -4,25 +4,24 @@
   comic_museum.html
   =================
   Comic Cover Museum — Golden Age Slideshow
-  Version: 1.1.0
-  Date:    2026-07-12
+  Version: 1.2.0
+  Date:    2026-07-15
 
   PURPOSE:
     A cinematic fullscreen slideshow of vintage comic covers fetched
-    live from Comic Vine. No local data needed — just set a year range
-    and go. Hosted at: aarontheman.github.io/comics/comic_museum.html
+    live from Comic Vine. No local data needed.
+    Hosted at: aarontheman.github.io/comics/comic_museum.html
 
   PROXY:
-    API calls are routed through a Cloudflare Worker proxy to avoid
-    CORS restrictions. The proxy handles the API key server-side.
-    Proxy URL: https://comics-proxy.zoopiedoop.workers.dev
+    API calls route through a Cloudflare Worker proxy.
+    Update PROXY_BASE below to match your worker URL.
 
   Version History:
     v1.0.0  2026-06-01  Initial release
-    v1.1.0  2026-07-12  Faster start (plays after first 100 covers load),
-                        background prefetch, pause button added,
-                        reduced max covers from 2000 to 500,
+    v1.1.0  2026-07-12  Faster start, pause button, 500 cover cap,
                         removed API key field (proxy handles it)
+    v1.2.0  2026-07-15  Tap to hide/show controls on iOS,
+                        language and country filters added to setup screen
 -->
 <head>
 <meta charset="UTF-8">
@@ -44,7 +43,8 @@ html,body{height:100%;background:var(--bg);color:var(--text);
   transition:opacity .6s}
 #setup.hidden{opacity:0;pointer-events:none}
 #setup-box{background:var(--surface);border:1px solid var(--border);
-  border-radius:12px;padding:2rem;width:min(420px,90vw)}
+  border-radius:12px;padding:2rem;width:min(440px,90vw);
+  max-height:90vh;overflow-y:auto}
 #setup-box h1{font-size:1.3rem;font-weight:700;color:var(--amber);
   letter-spacing:.06em;margin-bottom:.25rem}
 #setup-box .sub{font-size:13px;color:var(--text-dim);margin-bottom:1.5rem}
@@ -52,14 +52,14 @@ html,body{height:100%;background:var(--bg);color:var(--text);
 .field label{display:block;font-size:11px;text-transform:uppercase;
   letter-spacing:.08em;color:var(--text-dim);margin-bottom:5px}
 .field input,.field select{width:100%;background:#1e1e1e;
-  border:1px solid var(--border);color:var(--text);border-radius:var(--radius);
-  padding:8px 10px;font-size:14px;outline:none}
+  border:1px solid var(--border);color:var(--text);
+  border-radius:var(--radius);padding:8px 10px;font-size:14px;outline:none}
 .field input:focus,.field select:focus{border-color:var(--amber)}
 .field-row{display:flex;gap:10px}
 .field-row .field{flex:1}
-#start-btn{width:100%;margin-top:1.5rem;background:var(--amber);color:#111;
-  border:none;border-radius:var(--radius);padding:11px;font-size:15px;
-  font-weight:700;cursor:pointer;letter-spacing:.04em;transition:opacity .15s}
+#start-btn{width:100%;margin-top:1.5rem;background:var(--amber);
+  color:#111;border:none;border-radius:var(--radius);padding:11px;
+  font-size:15px;font-weight:700;cursor:pointer;transition:opacity .15s}
 #start-btn:hover{opacity:.88}
 #start-btn:disabled{opacity:.4;cursor:default}
 #setup-error{font-size:12px;color:#e05050;margin-top:8px;min-height:16px}
@@ -68,9 +68,9 @@ html,body{height:100%;background:var(--bg);color:var(--text);
 
 /* ── Museum screen ────────────────────────────────────────────────── */
 #museum{position:fixed;inset:0;z-index:50;display:flex;
-  align-items:center;justify-content:center;cursor:pointer}
-#cover-wrap{position:relative;width:100%;height:100%;display:flex;
   align-items:center;justify-content:center}
+#cover-wrap{position:relative;width:100%;height:100%;display:flex;
+  align-items:center;justify-content:center;cursor:pointer}
 #cover-img{max-width:100vw;max-height:100dvh;width:100vw;height:100dvh;
   object-fit:contain;display:block;transition:opacity .5s}
 #cover-img.fade{opacity:0}
@@ -78,30 +78,39 @@ html,body{height:100%;background:var(--bg);color:var(--text);
 /* Caption */
 #caption{position:absolute;bottom:0;left:0;right:0;
   background:linear-gradient(transparent,rgba(0,0,0,.9) 60%);
-  padding:40px 24px 20px;pointer-events:none;transition:opacity .4s}
+  padding:40px 24px 56px;pointer-events:none;transition:opacity .4s}
 #caption-title{font-size:clamp(14px,2.5vw,22px);font-weight:700;
   margin-bottom:3px}
 #caption-meta{font-size:clamp(11px,1.8vw,15px);color:var(--text-dim)}
 #caption.hidden{opacity:0}
 
-/* Controls */
+/* Controls — hide/show with .controls-hidden on #museum */
 #controls{position:absolute;top:0;left:0;right:0;padding:14px 20px;
   display:flex;align-items:center;gap:8px;flex-wrap:wrap;
   background:linear-gradient(rgba(0,0,0,.7),transparent);
-  opacity:0;transition:opacity .3s}
-#museum:hover #controls,#controls:focus-within{opacity:1}
+  transition:opacity .3s,visibility .3s}
+#museum.controls-hidden #controls{opacity:0;visibility:hidden}
+#museum:not(.controls-hidden) #controls{opacity:1}
 .ctrl-btn{background:rgba(255,255,255,.1);border:1px solid rgba(255,255,255,.15);
   color:#fff;border-radius:var(--radius);padding:5px 12px;font-size:12px;
   cursor:pointer;backdrop-filter:blur(4px);white-space:nowrap;
   transition:background .15s,border-color .15s}
-.ctrl-btn:hover{background:rgba(232,160,32,.3);border-color:var(--amber);
-  color:var(--amber)}
+.ctrl-btn:hover,.ctrl-btn:active{background:rgba(232,160,32,.3);
+  border-color:var(--amber);color:var(--amber)}
 .ctrl-btn.active{background:rgba(232,160,32,.25);border-color:var(--amber);
   color:var(--amber)}
 #ctrl-status{font-size:12px;color:rgba(255,255,255,.5);margin-right:auto}
-#speed-select{background:rgba(255,255,255,.1);border:1px solid rgba(255,255,255,.15);
-  color:#fff;border-radius:var(--radius);padding:5px 8px;font-size:12px;
-  cursor:pointer;backdrop-filter:blur(4px)}
+#speed-select{background:rgba(255,255,255,.1);
+  border:1px solid rgba(255,255,255,.15);color:#fff;
+  border-radius:var(--radius);padding:5px 8px;font-size:12px;cursor:pointer}
+
+/* Tap hint — shown briefly then fades */
+#tap-hint{position:absolute;bottom:70px;left:50%;
+  transform:translateX(-50%);
+  font-size:11px;color:rgba(255,255,255,.4);
+  pointer-events:none;white-space:nowrap;
+  transition:opacity 1s}
+#tap-hint.hidden{opacity:0}
 
 /* Progress bar */
 #progress{position:absolute;bottom:0;left:0;height:2px;
@@ -126,7 +135,9 @@ html,body{height:100%;background:var(--bg);color:var(--text);
 /* Kbd hint */
 #kbd-hint{position:absolute;bottom:16px;right:16px;
   font-size:10px;color:rgba(255,255,255,.2);pointer-events:none;
-  line-height:1.8;text-align:right}
+  line-height:1.8;text-align:right;
+  transition:opacity .3s}
+#museum.controls-hidden #kbd-hint{opacity:0}
 @media(max-width:600px){#kbd-hint{display:none}}
 </style>
 </head>
@@ -166,6 +177,36 @@ html,body{height:100%;background:var(--bg);color:var(--text);
       </select>
     </div>
 
+    <div class="field-row">
+      <div class="field">
+        <label>Language</label>
+        <select id="language-select">
+          <option value="English">English (default)</option>
+          <option value="">Any language</option>
+          <option value="French">French</option>
+          <option value="Spanish">Spanish</option>
+          <option value="German">German</option>
+          <option value="Italian">Italian</option>
+          <option value="Portuguese">Portuguese</option>
+          <option value="Japanese">Japanese</option>
+        </select>
+      </div>
+      <div class="field">
+        <label>Country</label>
+        <select id="country-select">
+          <option value="United States">USA (default)</option>
+          <option value="">Any country</option>
+          <option value="United Kingdom">United Kingdom</option>
+          <option value="Canada">Canada</option>
+          <option value="Australia">Australia</option>
+          <option value="France">France</option>
+          <option value="Italy">Italy</option>
+          <option value="Germany">Germany</option>
+          <option value="Japan">Japan</option>
+        </select>
+      </div>
+    </div>
+
     <div class="field">
       <label>Sort order</label>
       <select id="sort-select">
@@ -182,9 +223,10 @@ html,body{height:100%;background:var(--bg);color:var(--text);
 </div>
 
 <!-- Museum -->
-<div id="museum" style="display:none" onclick="handleMuseumClick(event)">
+<div id="museum" style="display:none">
   <div id="cover-wrap">
-    <img id="cover-img" src="" alt="Comic cover" class="fade">
+    <img id="cover-img" src="" alt="Comic cover" class="fade"
+         onclick="handleCoverClick()">
     <div id="load-overlay">
       <div id="load-msg">Loading first covers…</div>
       <div id="load-bar-wrap"><div id="load-bar"></div></div>
@@ -193,11 +235,12 @@ html,body{height:100%;background:var(--bg);color:var(--text);
       <div id="caption-title"></div>
       <div id="caption-meta"></div>
     </div>
+    <div id="tap-hint">Tap cover to pause &nbsp;·&nbsp; Tap controls area to show/hide</div>
     <div id="cover-count"></div>
     <div id="progress"></div>
   </div>
 
-  <div id="controls" onclick="event.stopPropagation()">
+  <div id="controls">
     <span id="ctrl-status"></span>
     <select id="speed-select" onchange="updateSpeed()" title="Speed">
       <option value="2000">2s</option>
@@ -217,6 +260,7 @@ html,body{height:100%;background:var(--bg);color:var(--text);
   <div id="kbd-hint">
     &#8592;&#8594; navigate &nbsp;
     Space pause &nbsp;
+    H hide controls &nbsp;
     R random &nbsp;
     I info &nbsp;
     Esc settings
@@ -225,23 +269,21 @@ html,body{height:100%;background:var(--bg);color:var(--text);
 
 <script>
 // ── Config ────────────────────────────────────────────────────────────────────
-// Cloudflare Worker proxy — handles API key and CORS server-side
 const PROXY_BASE = 'https://comics-proxy.zoopiedoop.workers.dev/api';
-
-// Start playback after this many covers are loaded (feels instant)
-const START_AFTER = 20;
-// Maximum total covers to fetch (keeps CV load reasonable)
-const MAX_COVERS  = 500;
+const START_AFTER = 20;   // start playback after this many covers load
+const MAX_COVERS  = 500;  // maximum covers to fetch per session
 
 // ── State ─────────────────────────────────────────────────────────────────────
-let issues       = [];       // all fetched issues
-let currentIdx   = 0;        // index of currently shown cover
-let isPlaying    = true;
-let isRandom     = true;
+let issues         = [];
+let currentIdx     = 0;
+let isPlaying      = true;
+let isRandom       = true;
+let controlsHidden = false;
 let slideshowTimer = null;
-let speed        = 3000;
+let speed          = 3000;
 let captionVisible = false;
-let fetchDone    = false;    // true when background fetch is complete
+let fetchDone      = false;
+let tapHintTimer   = null;
 
 // ── Setup ─────────────────────────────────────────────────────────────────────
 async function startMuseum() {
@@ -252,23 +294,19 @@ async function startMuseum() {
       'Please enter a valid year range.';
     return;
   }
-
   const btn = document.getElementById('start-btn');
   btn.disabled = true;
   btn.textContent = 'Loading first covers…';
   document.getElementById('setup-error').textContent = '';
   document.getElementById('loading-note').textContent =
-    'Playback starts after the first ' + START_AFTER + ' covers load. ' +
-    'More load in the background.';
+    'Playback starts after the first ' + START_AFTER +
+    ' covers load. More load in the background.';
 
   try {
-    // Show museum immediately, load overlay on top
     document.getElementById('setup').classList.add('hidden');
     document.getElementById('museum').style.display = 'block';
-
-    // Start background fetch — plays as soon as START_AFTER covers arrive
+    showTapHint();
     await fetchIssues(yearFrom, yearTo);
-
   } catch(e) {
     document.getElementById('setup').classList.remove('hidden');
     document.getElementById('museum').style.display = 'none';
@@ -279,20 +317,23 @@ async function startMuseum() {
   }
 }
 
-// ── Fetch covers from CV via proxy ────────────────────────────────────────────
+// ── Fetch ─────────────────────────────────────────────────────────────────────
 async function fetchIssues(yearFrom, yearTo) {
   const publisher = document.getElementById('publisher-select').value;
+  const language  = document.getElementById('language-select').value;
+  const country   = document.getElementById('country-select').value;
   const sortOrder = document.getElementById('sort-select').value;
-  const dateFrom  = `${yearFrom}-01-01 00:00:00`;
-  const dateTo    = `${yearTo}-12-31 23:59:59`;
+
+  const dateFrom = `${yearFrom}-01-01 00:00:00`;
+  const dateTo   = `${yearTo}-12-31 23:59:59`;
+
   let filter = `cover_date:${dateFrom}|${dateTo}`;
   if (publisher) filter += `,volume.publisher.name:${publisher}`;
+  if (country)   filter += `,volume.publisher.country:${country}`;
+
   const cvSort = sortOrder === 'date_desc' ? 'cover_date:desc' : 'cover_date:asc';
 
-  let started  = false;
-  let offset   = 0;
-  let total    = 0;
-  let fetched  = 0;
+  let started = false, offset = 0, total = 0, fetched = 0;
 
   while (fetched < MAX_COVERS) {
     const data = await cvFetch('issues', {
@@ -303,25 +344,37 @@ async function fetchIssues(yearFrom, yearTo) {
       offset,
     });
 
-    if (!total) total = Math.min(data.number_of_total_results, MAX_COVERS);
+    if (!total) total = Math.min(data.number_of_total_results || 0, MAX_COVERS);
 
-    const batch = (data.results || []).filter(i => i.image?.medium_url);
+    // Filter by language client-side (CV doesn't support language filter directly)
+    let batch = (data.results || []).filter(i => i.image?.medium_url);
+    if (language) {
+      batch = batch.filter(i => {
+        const name = (i.volume?.name || '').toLowerCase();
+        const langLower = language.toLowerCase();
+        // Exclude issues whose volume name contains non-matching language keywords
+        const nonEnglishMarkers = ['spanish','french','german','italian',
+          'portuguese','japanese','édition','edicion','edição','ausgabe'];
+        if (language === 'English') {
+          return !nonEnglishMarkers.some(m => name.includes(m));
+        }
+        return name.includes(langLower);
+      });
+    }
+
     issues = issues.concat(batch);
     fetched += 100;
     offset  += 100;
 
-    // Update progress bar
-    const pct = Math.min(100, Math.round((issues.length / Math.min(total, MAX_COVERS)) * 100));
+    const pct = Math.min(100,
+      Math.round((issues.length / Math.max(1, Math.min(total, MAX_COVERS))) * 100));
     document.getElementById('load-bar').style.width = pct + '%';
     document.getElementById('load-msg').textContent =
-      `Loading… ${issues.length} of ${Math.min(total, MAX_COVERS)} covers`;
+      `Loading… ${issues.length} covers`;
 
-    // Start playback as soon as START_AFTER covers are available
     if (!started && issues.length >= START_AFTER) {
       started = true;
-      if (document.getElementById('sort-select').value === 'random') {
-        isRandom = true;
-      }
+      isRandom = document.getElementById('sort-select').value === 'random';
       document.getElementById('load-overlay').classList.add('hidden');
       currentIdx = 0;
       showCover(currentIdx);
@@ -329,9 +382,7 @@ async function fetchIssues(yearFrom, yearTo) {
       updateCtrlStatus();
     }
 
-    if (offset >= total || fetched >= MAX_COVERS) break;
-
-    // Pause between pages to respect CV rate limit
+    if (offset >= total || fetched >= MAX_COVERS || !data.results?.length) break;
     await sleep(1500);
   }
 
@@ -384,19 +435,34 @@ function updateCaption(issue) {
 }
 
 function monthName(mm) {
-  const m=['','Jan','Feb','Mar','Apr','May','Jun',
-           'Jul','Aug','Sep','Oct','Nov','Dec'];
+  const m = ['','Jan','Feb','Mar','Apr','May','Jun',
+             'Jul','Aug','Sep','Oct','Nov','Dec'];
   return m[parseInt(mm)] || '';
 }
 
 function showCaption() {
   captionVisible = !captionVisible;
-  document.getElementById('caption').classList.toggle('hidden', !captionVisible);
+  document.getElementById('caption')
+    .classList.toggle('hidden', !captionVisible);
 }
 
 function updateCtrlStatus() {
   document.getElementById('ctrl-status').textContent =
     `${issues.length}${fetchDone ? '' : '+'} covers`;
+}
+
+// ── Controls visibility ───────────────────────────────────────────────────────
+function toggleControls() {
+  controlsHidden = !controlsHidden;
+  document.getElementById('museum')
+    .classList.toggle('controls-hidden', controlsHidden);
+}
+
+function showTapHint() {
+  const hint = document.getElementById('tap-hint');
+  hint.classList.remove('hidden');
+  clearTimeout(tapHintTimer);
+  tapHintTimer = setTimeout(() => hint.classList.add('hidden'), 4000);
 }
 
 // ── Navigation ────────────────────────────────────────────────────────────────
@@ -433,20 +499,16 @@ function stopSlideshow() {
 function togglePlay() {
   isPlaying = !isPlaying;
   const btn = document.getElementById('btn-play');
-  if (isPlaying) {
-    btn.textContent = '⏸ Pause';
-    startSlideshow();
-  } else {
-    btn.textContent = '▶ Play';
-    stopSlideshow();
-  }
+  if (isPlaying) { btn.textContent = '⏸ Pause'; startSlideshow(); }
+  else           { btn.textContent = '▶ Play';  stopSlideshow(); }
 }
 
 function toggleRandom() {
   isRandom = !isRandom;
   document.getElementById('btn-random').textContent =
     isRandom ? '⟳ Random' : '⟳ Sequential';
-  document.getElementById('btn-random').classList.toggle('active', isRandom);
+  document.getElementById('btn-random')
+    .classList.toggle('active', isRandom);
 }
 
 function updateSpeed() {
@@ -476,20 +538,23 @@ function updateProgress() {
   if (isPlaying && speed > 0) startProgress();
 }
 
-// ── Interaction ───────────────────────────────────────────────────────────────
-function handleMuseumClick(e) {
-  if (e.target === document.getElementById('cover-img') ||
-      e.target === document.getElementById('cover-wrap')) {
+// ── Cover click ───────────────────────────────────────────────────────────────
+function handleCoverClick() {
+  // On mobile: toggle controls; on desktop: pause/play
+  if (window.matchMedia('(pointer: coarse)').matches) {
+    toggleControls();
+  } else {
     togglePlay();
   }
 }
 
+// ── Back to setup ─────────────────────────────────────────────────────────────
 function backToSetup() {
   stopSlideshow();
-  issues = [];
-  fetchDone = false;
-  currentIdx = 0;
+  issues = []; fetchDone = false; currentIdx = 0;
+  controlsHidden = false;
   document.getElementById('museum').style.display = 'none';
+  document.getElementById('museum').classList.remove('controls-hidden');
   document.getElementById('setup').classList.remove('hidden');
   document.getElementById('start-btn').disabled = false;
   document.getElementById('start-btn').textContent = '▶ Open the Museum';
@@ -507,6 +572,7 @@ document.addEventListener('keydown', e => {
     case 'ArrowRight': e.preventDefault(); nextCover(); break;
     case 'ArrowLeft':  e.preventDefault(); prevCover(); break;
     case ' ':          e.preventDefault(); togglePlay(); break;
+    case 'h': case 'H': toggleControls(); break;
     case 'r': case 'R': toggleRandom(); break;
     case 'i': case 'I': showCaption(); break;
     case 'Escape': backToSetup(); break;
@@ -514,16 +580,21 @@ document.addEventListener('keydown', e => {
 });
 
 // ── Touch / swipe ─────────────────────────────────────────────────────────────
-let touchStartX = 0, touchStartY = 0;
+let touchStartX = 0, touchStartY = 0, touchStartT = 0;
 document.addEventListener('touchstart', e => {
   touchStartX = e.touches[0].clientX;
   touchStartY = e.touches[0].clientY;
+  touchStartT = Date.now();
 }, {passive:true});
+
 document.addEventListener('touchend', e => {
   const dx = e.changedTouches[0].clientX - touchStartX;
   const dy = e.changedTouches[0].clientY - touchStartY;
-  if (Math.abs(dx) < 40 || Math.abs(dy) > Math.abs(dx)) return;
-  if (dx < 0) nextCover(); else prevCover();
+  const dt = Date.now() - touchStartT;
+  // Swipe: horizontal, fast, significant distance
+  if (Math.abs(dx) > 40 && Math.abs(dy) < Math.abs(dx) && dt < 400) {
+    if (dx < 0) nextCover(); else prevCover();
+  }
 }, {passive:true});
 
 // ── Utils ─────────────────────────────────────────────────────────────────────
