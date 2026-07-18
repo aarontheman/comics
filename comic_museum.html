@@ -4,8 +4,8 @@
   comic_museum.html
   =================
   Comic Cover Museum — Golden Age Slideshow
-  Version: 1.2.0
-  Date:    2026-07-15
+  Version: 1.3.0
+  Date:    2026-07-16
 
   PURPOSE:
     A cinematic fullscreen slideshow of vintage comic covers fetched
@@ -20,8 +20,8 @@
     v1.0.0  2026-06-01  Initial release
     v1.1.0  2026-07-12  Faster start, pause button, 500 cover cap,
                         removed API key field (proxy handles it)
-    v1.2.0  2026-07-15  Tap to hide/show controls on iOS,
-                        language and country filters added to setup screen
+    v1.3.0  2026-07-16  No-repeat shuffle queue for random mode,
+                        publisher filter fixed (client-side filtering)
 -->
 <head>
 <meta charset="UTF-8">
@@ -328,8 +328,7 @@ async function fetchIssues(yearFrom, yearTo) {
   const dateTo   = `${yearTo}-12-31 23:59:59`;
 
   let filter = `cover_date:${dateFrom}|${dateTo}`;
-  if (publisher) filter += `,volume.publisher.name:${publisher}`;
-  if (country)   filter += `,volume.publisher.country:${country}`;
+  if (country) filter += `,volume.publisher.country:${country}`;
 
   const cvSort = sortOrder === 'date_desc' ? 'cover_date:desc' : 'cover_date:asc';
 
@@ -346,19 +345,26 @@ async function fetchIssues(yearFrom, yearTo) {
 
     if (!total) total = Math.min(data.number_of_total_results || 0, MAX_COVERS);
 
-    // Filter by language client-side (CV doesn't support language filter directly)
+    // Filter client-side by publisher and language
+    // (CV API doesn't reliably support these as server-side filters)
     let batch = (data.results || []).filter(i => i.image?.medium_url);
+
+    if (publisher) {
+      batch = batch.filter(i =>
+        (i.volume?.publisher?.name || '').toLowerCase()
+          .includes(publisher.toLowerCase().split(' ')[0].toLowerCase())
+      );
+    }
+
     if (language) {
+      const nonEnglishMarkers = ['spanish','french','german','italian',
+        'portuguese','japanese','édition','edicion','edição','ausgabe'];
       batch = batch.filter(i => {
         const name = (i.volume?.name || '').toLowerCase();
-        const langLower = language.toLowerCase();
-        // Exclude issues whose volume name contains non-matching language keywords
-        const nonEnglishMarkers = ['spanish','french','german','italian',
-          'portuguese','japanese','édition','edicion','edição','ausgabe'];
         if (language === 'English') {
           return !nonEnglishMarkers.some(m => name.includes(m));
         }
-        return name.includes(langLower);
+        return name.includes(language.toLowerCase());
       });
     }
 
@@ -375,6 +381,7 @@ async function fetchIssues(yearFrom, yearTo) {
     if (!started && issues.length >= START_AFTER) {
       started = true;
       isRandom = document.getElementById('sort-select').value === 'random';
+      if (isRandom) buildShuffleQueue();
       document.getElementById('load-overlay').classList.add('hidden');
       currentIdx = 0;
       showCover(currentIdx);
@@ -465,20 +472,33 @@ function showTapHint() {
   tapHintTimer = setTimeout(() => hint.classList.add('hidden'), 4000);
 }
 
+// ── Shuffle queue ─────────────────────────────────────────────────────────────
+// Ensures every cover plays once before any repeat in random mode
+let shuffleQueue = [];
+
+function buildShuffleQueue() {
+  shuffleQueue = [...Array(issues.length).keys()];
+  for (let i = shuffleQueue.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [shuffleQueue[i], shuffleQueue[j]] = [shuffleQueue[j], shuffleQueue[i]];
+  }
+}
+
+function nextShuffleIdx() {
+  if (shuffleQueue.length === 0) buildShuffleQueue();
+  return shuffleQueue.shift();
+}
+
 // ── Navigation ────────────────────────────────────────────────────────────────
 function nextCover() {
   if (!issues.length) return;
-  currentIdx = isRandom
-    ? Math.floor(Math.random() * issues.length)
-    : (currentIdx + 1) % issues.length;
+  currentIdx = isRandom ? nextShuffleIdx() : (currentIdx + 1) % issues.length;
   showCover(currentIdx);
 }
 
 function prevCover() {
   if (!issues.length) return;
-  currentIdx = isRandom
-    ? Math.floor(Math.random() * issues.length)
-    : (currentIdx - 1 + issues.length) % issues.length;
+  currentIdx = isRandom ? nextShuffleIdx() : (currentIdx - 1 + issues.length) % issues.length;
   showCover(currentIdx);
 }
 
@@ -505,6 +525,7 @@ function togglePlay() {
 
 function toggleRandom() {
   isRandom = !isRandom;
+  if (isRandom) buildShuffleQueue();
   document.getElementById('btn-random').textContent =
     isRandom ? '⟳ Random' : '⟳ Sequential';
   document.getElementById('btn-random')
